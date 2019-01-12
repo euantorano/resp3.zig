@@ -1,8 +1,11 @@
 const std = @import("std");
 const math = std.math;
 const fmt = std.fmt;
+const HashMap = std.hash_map.HashMap;
+const mem = std.mem;
 
 const assertOrPanic = std.debug.assertOrPanic;
+const debugAllocator = std.debug.global_allocator;
 
 pub const Resp3Type = packed enum(u8) {
     pub Array = '*',
@@ -15,7 +18,7 @@ pub const Resp3Type = packed enum(u8) {
     pub Boolean = '#',
     pub BlobError = '!',
     pub VerbatimString = '=',
-//    pub Map = '%',
+    //pub Map = '%',
     pub Set = '~',
 //    pub Attribute = '|',
 //    pub Push = '>',
@@ -26,7 +29,37 @@ pub const Resp3Type = packed enum(u8) {
 pub const Error = struct {
     pub Code: []const u8,
     pub Message: []const u8,
+
+    pub fn equals(a: Error, b: Error) bool {
+        return mem.eql(u8, a.Code, b.Code) and mem.eql(u8, a.Message, b.Message);
+    }
 };
+
+test "Error::equals for two of the same errors" {
+    const err_1 = Error {
+        .Code = &"ERR",
+        .Message = &"this is the error description",
+    };
+    const err_2 = Error {
+        .Code = &"ERR",
+        .Message = &"this is the error description",
+    };
+
+    assertOrPanic(err_1.equals(err_2));
+}
+
+test "Error::equals for two different errors" {
+    const err_1 = Error {
+        .Code = &"ERR",
+        .Message = &"this is the error description",
+    };
+    const err_2 = Error {
+        .Code = &"ERR",
+        .Message = &"this is not the error description",
+    };
+
+    assertOrPanic(!err_1.equals(err_2));
+}
 
 pub const VerbatimStringType = enum {
     pub Text,
@@ -43,7 +76,39 @@ pub const VerbatimStringType = enum {
 pub const VerbatimString = struct {
     pub Type: VerbatimStringType,
     pub Value: []const u8,
+
+    pub fn equals(a: VerbatimString, b: VerbatimString) bool {
+        return (a.Type == b.Type) and mem.eql(u8, a.Value, b.Value);
+    }
 };
+
+test "VerbatimString::equals for two of the same verbatim strings" {
+    const verbatim_string_1 = VerbatimString {
+        .Type = VerbatimStringType.Text,
+        .Value = &"Some string",
+    };
+    const verbatim_string_2 = VerbatimString {
+        .Type = VerbatimStringType.Text,
+        .Value = &"Some string",
+    };
+
+    assertOrPanic(verbatim_string_1.equals(verbatim_string_2));
+}
+
+test "VerbatimString::equals for two different verbatim strings" {
+    const verbatim_string_1 = VerbatimString {
+        .Type = VerbatimStringType.Text,
+        .Value = &"Some string",
+    };
+    const verbatim_string_2 = VerbatimString {
+        .Type = VerbatimStringType.Text,
+        .Value = &"Some string 2",
+    };
+
+    assertOrPanic(!verbatim_string_1.equals(verbatim_string_2));
+}
+
+//const Resp3ValueHashMap = HashMap(Resp3Value, Resp3Value);
 
 pub const Resp3Value = union(Resp3Type) {
     pub Array: []const Resp3Value,
@@ -56,8 +121,10 @@ pub const Resp3Value = union(Resp3Type) {
     pub Boolean: bool,
     pub BlobError: Error,
     pub VerbatimString: VerbatimString,
-    // TODO: Map
+    //pub Map: Resp3ValueHashMap,
     pub Set: []const Resp3Value, // TODO: proper set type
+
+    // TODO: init/deinit to deinit Resp3ValueHashMap?
 
     pub fn encodedLength(self: Resp3Value) usize {
         return switch (self) {
@@ -110,10 +177,13 @@ pub const Resp3Value = union(Resp3Type) {
                 // = (1) + length_len + \r (1) + \n (1) + total_str_len + \r (1) + \n (1)
                 break :blk @intCast(usize, 5 + length_len + total_str_len);
             },
+            //Resp3Value.Map => |map| blk: {
+            //    break :blk lenOfMapOfValues(map);
+            //},
             Resp3Value.Set => |set| blk: {
                 // * (1) + array_len_len + \r (1) + \n (1) + elements_len
                 break :blk lenOfSliceOfValues(set);
-            }
+            },
         };
     }
 
@@ -132,6 +202,108 @@ pub const Resp3Value = union(Resp3Type) {
 
         // start_char (1) + array_len_len + \r (1) + \n (1) + elements_len
         return 3 + array_len_len + elements_len;
+    }
+
+    //fn lenOfMapOfValues(values: Resp3ValueHashMap) usize {
+    //   const map_len_len = get_string_length_for_int(values.count());
+    //
+    //    var elements_len: usize = 0;
+    //
+    //    var it = values.iterator();
+    //    while (it.next()) |entry| {
+    //        elements_len += entry.key.encodedLength();
+    //        elements_len += entry.value.encodedLength();
+    //    }
+    //
+    //    // start_char(1) + map_len_len + \r (1) + \n (1) + elements_len
+    //    return 3 + map_len_len + elements_len;
+    //}
+
+    pub fn equals(a: Resp3Value, b: Resp3Value) bool {
+        if (Resp3Type(a) != Resp3Type(b)) {
+            return false;
+        }
+
+        return switch (a) {
+            Resp3Value.Array => |a_arr| blk: {
+                const b_arr = b.Array;
+
+                if (a_arr.len != b_arr.len) {
+                    break :blk false;
+                }
+
+                var i: usize = 0;
+                while (i < a_arr.len) {
+                    const a_entry = a_arr[i];
+                    const b_entry = b_arr[i];
+
+                    if (!(a_entry.equals(b_entry))) {
+                        break :blk false;
+                    }
+
+                    i += 1;
+                }
+
+                break :blk true;
+            },
+            Resp3Value.BlobString => |a_str| blk: {
+                const b_str = b.BlobString;
+
+                break :blk mem.eql(u8, a_str, b_str);
+            },
+            Resp3Value.SimpleString => |a_str| blk: {
+                const b_str = b.SimpleString;
+
+                break :blk mem.eql(u8, a_str, b_str);
+            },
+            Resp3Type.SimpleError => |a_err| blk: {
+                const b_err = b.SimpleError;
+
+                break :blk a_err.equals(b_err);
+            },
+            Resp3Value.Number => |a_num| blk: {
+                const b_num = b.Number;
+
+                break :blk (a_num == b_num);
+            },
+            Resp3Value.Null => true,
+            Resp3Value.Boolean => |a_bool| blk: {
+                const b_bool = b.Boolean;
+
+                break :blk (a_bool == b_bool);
+            },
+            Resp3Value.BlobError => |a_err| blk: {
+                const b_err = b.BlobError;
+
+                break :blk a_err.equals(b_err);
+            },
+            Resp3Value.VerbatimString => |a_str| blk: {
+                const b_str = b.VerbatimString;
+
+                break :blk a_str.equals(b_str);
+            },
+            Resp3Value.Set => |a_set| blk: {
+                const b_set = b.Set;
+
+                if (a_set.len != b_set.len) {
+                    break :blk false;
+                }
+
+                var i: usize = 0;
+                while (i < a_set.len) {
+                    const a_entry = a_set[i];
+                    const b_entry = b_set[i];
+
+                    if (!(a_entry.equals(b_entry))) {
+                        break :blk false;
+                    }
+
+                    i += 1;
+                }
+
+                break :blk true;
+            },
+        };
     }
 };
 
@@ -193,10 +365,9 @@ test "Resp3Value::encodedLength for BlobError" {
 }
 
 test "Resp3Value::encodedLength for VerbatimString" {
-    const str = "Some string";
     const verbatim_string = VerbatimString {
         .Type = VerbatimStringType.Text,
-        .Value = str[0..],
+        .Value = &"Some string",
     };
     const val = Resp3Value { .VerbatimString = verbatim_string };
     const expected = "=15\r\ntxt:Some string\r\n";
@@ -219,6 +390,25 @@ test "Resp3Value::encodedLength for Array of Number" {
     assertOrPanic(val.encodedLength() == expected.len);
 }
 
+//test "Resp3Value::encodedLength for Map of [sring, num]" {
+//    var map = Resp3ValueHashMap.init(debugAllocator);
+//    defer map.deinit();
+//
+//
+//    const key1 = Resp3Value { .SimpleString = &"first" };
+//    const value1 = Resp3Value { .Number = 1 };
+//    assertOrPanic((try map.put(key1, value1)) == null);
+//
+//    const key2 = Resp3Value { .SimpleString = &"second" };
+//    const value2 = Resp3Value { .Number = 2 };
+//    assertOrPanic((try map.put(key2, value2)) == null);
+//
+//    const val = Resp3Value { .Map = map };
+//    const expected = "%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n";
+//
+//    assertOrPanic(val.encodedLength() == expected.len);
+//}
+
 test "Resp3Value::encodedLength for Set of mixed types" {
     const orange = Resp3Value { .SimpleString = &"orange" };
     const apple = Resp3Value { .SimpleString = &"apple" };
@@ -236,4 +426,25 @@ test "Resp3Value::encodedLength for Set of mixed types" {
     const expected = "~5\r\n+orange\r\n+apple\r\n#t\r\n:100\r\n:999\r\n";
 
     assertOrPanic(val.encodedLength() == expected.len);
+}
+
+test "Resp3Value::equals for two different types" {
+    const val_1 = Resp3Value { .Boolean = true };
+    const val_2 = Resp3Value { .Number = 1 };
+
+    assertOrPanic(val_1.equals(val_2) == false);
+}
+
+test "Resp3Value::equals for two of the same types and values" {
+    const val_1 = Resp3Value { .Boolean = true };
+    const val_2 = Resp3Value { .Boolean = true };
+
+    assertOrPanic(val_1.equals(val_2) == true);
+}
+
+test "Resp3Value::equals for two of the same types but different values" {
+    const val_1 = Resp3Value { .Boolean = true };
+    const val_2 = Resp3Value { .Boolean = false };
+
+    assertOrPanic(val_1.equals(val_2) == false);
 }
