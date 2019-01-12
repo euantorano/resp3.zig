@@ -56,7 +56,7 @@ pub const Resp3Value = union(Resp3Type) {
     pub BlobError: Error,
     pub VerbatimString: VerbatimString,
 
-    pub fn encoded_length(self: Resp3Value) usize {
+    pub fn encodedLength(self: Resp3Value) usize {
         return switch (self) {
             Resp3Value.Array => |arr| blk: {
                 const array_len_len = get_string_length_for_int(arr.len);
@@ -64,7 +64,7 @@ pub const Resp3Value = union(Resp3Type) {
                 var elements_len: usize = 0;
 
                 for (arr) |entry| {
-                    elements_len += entry.encoded_length();
+                    elements_len += entry.encodedLength();
                 }
 
                 // * (1) + array_len_len + \r (1) + \n (1) + elements_len
@@ -123,23 +123,23 @@ fn get_string_length_for_int(val: var) usize {
     return if (val == 0) 1 else (@intCast(usize, math.log10(val) + 1));
 }
 
-test "Resp3Value::encoded_length for BlobString" {
+test "Resp3Value::encodedLength for BlobString" {
     const str = "helloworld";
     const val = Resp3Value { .BlobString = str[0..] };
     const expected = "$11\r\nhelloworld\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for SimpleString" {
+test "Resp3Value::encodedLength for SimpleString" {
     const str = "hello world";
     const val = Resp3Value { .SimpleString = str[0..] };
     const expected = "+hello world\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for SimpleError" {
+test "Resp3Value::encodedLength for SimpleError" {
     const err_code = "ERR";
     const err_message = "this is the error description";
     const err = Error {
@@ -149,31 +149,31 @@ test "Resp3Value::encoded_length for SimpleError" {
     const val = Resp3Value { .SimpleError = err };
     const expected = "-ERR this is the error description\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for Number" {
+test "Resp3Value::encodedLength for Number" {
     const val = Resp3Value { .Number = 1234 };
     const expected = ":1234\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for Null" {
+test "Resp3Value::encodedLength for Null" {
     const val = Resp3Value { .Null = undefined };
     const expected = "_\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for Boolean" {
+test "Resp3Value::encodedLength for Boolean" {
     const val = Resp3Value { .Boolean = true };
     const expected = "#t\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for BlobError" {
+test "Resp3Value::encodedLength for BlobError" {
     const err_code = "SYNTAX";
     const err_message = "invalid syntax";
     const err = Error {
@@ -183,10 +183,10 @@ test "Resp3Value::encoded_length for BlobError" {
     const val = Resp3Value { .BlobError = err };
     const expected = "!21\r\nSYNTAX invalid syntax\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for VerbatimString" {
+test "Resp3Value::encodedLength for VerbatimString" {
     const str = "Some string";
     const verbatim_string = VerbatimString {
         .Type = VerbatimStringType.Text,
@@ -195,16 +195,20 @@ test "Resp3Value::encoded_length for VerbatimString" {
     const val = Resp3Value { .VerbatimString = verbatim_string };
     const expected = "=15\r\ntxt:Some string\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
 
-test "Resp3Value::encoded_length for Array of Number" {
+test "Resp3Value::encodedLength for Array of Number" {
     const num_1 = Resp3Value { .Number = 1 };
     const num_2 = Resp3Value { .Number = 2 };
     const num_3 = Resp3Value { .Number = 3 };
-    const arr = []Resp3Value{ num_1, num_2, num_3 };
+    const arr = []Resp3Value{ 
+        num_1, 
+        num_2, 
+        num_3,
+    };
     const val = Resp3Value { .Array = &arr };
     const expected = "*3\r\n:1\r\n:2\r\n:3\r\n";
 
-    assertOrPanic(val.encoded_length() == expected.len);
+    assertOrPanic(val.encodedLength() == expected.len);
 }
