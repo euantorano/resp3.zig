@@ -46,9 +46,9 @@ pub const VerbatimString = struct {
 };
 
 pub const Resp3Value = union(Resp3Type) {
-    pub Array: []const Resp3Value,
-    pub BlobString: []const u8,
-    pub SimpleString: []const u8,
+    pub Array: []Resp3Value,
+    pub BlobString: []u8,
+    pub SimpleString: []u8,
     pub SimpleError: Error,
     pub Number: i64,
     pub Null: void,
