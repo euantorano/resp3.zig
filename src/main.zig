@@ -16,7 +16,7 @@ pub const Resp3Type = packed enum(u8) {
     pub BlobError = '!',
     pub VerbatimString = '=',
 //    pub Map = '%',
-//    pub Set = '~',
+    pub Set = '~',
 //    pub Attribute = '|',
 //    pub Push = '>',
 //    pub Hello = 'H',
@@ -46,29 +46,24 @@ pub const VerbatimString = struct {
 };
 
 pub const Resp3Value = union(Resp3Type) {
-    pub Array: []Resp3Value,
-    pub BlobString: []u8,
-    pub SimpleString: []u8,
+    pub Array: []const Resp3Value,
+    pub BlobString: []const u8,
+    pub SimpleString: []const u8,
     pub SimpleError: Error,
     pub Number: i64,
     pub Null: void,
+    // TODO: Double
     pub Boolean: bool,
     pub BlobError: Error,
     pub VerbatimString: VerbatimString,
+    // TODO: Map
+    pub Set: []const Resp3Value, // TODO: proper set type
 
     pub fn encodedLength(self: Resp3Value) usize {
         return switch (self) {
             Resp3Value.Array => |arr| blk: {
-                const array_len_len = get_string_length_for_int(arr.len);
-
-                var elements_len: usize = 0;
-
-                for (arr) |entry| {
-                    elements_len += entry.encodedLength();
-                }
-
                 // * (1) + array_len_len + \r (1) + \n (1) + elements_len
-                break :blk 3 + array_len_len + elements_len;
+                break :blk lenOfSliceOfValues(arr);
             },
             Resp3Value.BlobString => |str| blk: {
                 const str_len = str.len;
@@ -115,36 +110,49 @@ pub const Resp3Value = union(Resp3Type) {
                 // = (1) + length_len + \r (1) + \n (1) + total_str_len + \r (1) + \n (1)
                 break :blk @intCast(usize, 5 + length_len + total_str_len);
             },
+            Resp3Value.Set => |set| blk: {
+                // * (1) + array_len_len + \r (1) + \n (1) + elements_len
+                break :blk lenOfSliceOfValues(set);
+            }
         };
+    }
+
+    fn get_string_length_for_int(val: var) usize {
+        return if (val == 0) 1 else (@intCast(usize, math.log10(val) + 1));
+    }
+
+    fn lenOfSliceOfValues(values: []const Resp3Value) usize {
+        const array_len_len = get_string_length_for_int(values.len);
+
+        var elements_len: usize = 0;
+
+        for (values) |entry| {
+            elements_len += entry.encodedLength();
+        }
+
+        // start_char (1) + array_len_len + \r (1) + \n (1) + elements_len
+        return 3 + array_len_len + elements_len;
     }
 };
 
-fn get_string_length_for_int(val: var) usize {
-    return if (val == 0) 1 else (@intCast(usize, math.log10(val) + 1));
-}
-
 test "Resp3Value::encodedLength for BlobString" {
-    const str = "helloworld";
-    const val = Resp3Value { .BlobString = str[0..] };
+    const val = Resp3Value { .BlobString = &"helloworld" };
     const expected = "$11\r\nhelloworld\r\n";
 
     assertOrPanic(val.encodedLength() == expected.len);
 }
 
 test "Resp3Value::encodedLength for SimpleString" {
-    const str = "hello world";
-    const val = Resp3Value { .SimpleString = str[0..] };
+    const val = Resp3Value { .SimpleString = &"hello world" };
     const expected = "+hello world\r\n";
 
     assertOrPanic(val.encodedLength() == expected.len);
 }
 
 test "Resp3Value::encodedLength for SimpleError" {
-    const err_code = "ERR";
-    const err_message = "this is the error description";
     const err = Error {
-        .Code = err_code[0..],
-        .Message = err_message[0..],
+        .Code = &"ERR",
+        .Message = &"this is the error description",
     };
     const val = Resp3Value { .SimpleError = err };
     const expected = "-ERR this is the error description\r\n";
@@ -174,11 +182,9 @@ test "Resp3Value::encodedLength for Boolean" {
 }
 
 test "Resp3Value::encodedLength for BlobError" {
-    const err_code = "SYNTAX";
-    const err_message = "invalid syntax";
     const err = Error {
-        .Code = err_code[0..],
-        .Message = err_message[0..],
+        .Code = &"SYNTAX",
+        .Message = &"invalid syntax",
     };
     const val = Resp3Value { .BlobError = err };
     const expected = "!21\r\nSYNTAX invalid syntax\r\n";
@@ -209,6 +215,25 @@ test "Resp3Value::encodedLength for Array of Number" {
     };
     const val = Resp3Value { .Array = &arr };
     const expected = "*3\r\n:1\r\n:2\r\n:3\r\n";
+
+    assertOrPanic(val.encodedLength() == expected.len);
+}
+
+test "Resp3Value::encodedLength for Set of mixed types" {
+    const orange = Resp3Value { .SimpleString = &"orange" };
+    const apple = Resp3Value { .SimpleString = &"apple" };
+    const true_val = Resp3Value { .Boolean = true };
+    const number_100 = Resp3Value { .Number = 100 };
+    const number_999 = Resp3Value { .Number = 999 };
+    const set = []Resp3Value{ 
+        orange, 
+        apple, 
+        true_val,
+        number_100,
+        number_999,
+    };
+    const val = Resp3Value { .Set = &set };
+    const expected = "~5\r\n+orange\r\n+apple\r\n#t\r\n:100\r\n:999\r\n";
 
     assertOrPanic(val.encodedLength() == expected.len);
 }
