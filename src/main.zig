@@ -4,6 +4,8 @@ const fmt = std.fmt;
 const HashMap = std.hash_map.HashMap;
 const mem = std.mem;
 
+const hash = @import("./hash.zig");
+
 const assertOrPanic = std.debug.assertOrPanic;
 const debugAllocator = std.debug.global_allocator;
 
@@ -18,7 +20,7 @@ pub const Resp3Type = packed enum(u8) {
     pub Boolean = '#',
     pub BlobError = '!',
     pub VerbatimString = '=',
-    //pub Map = '%',
+    pub Map = '%',
     pub Set = '~',
 //    pub Attribute = '|',
 //    pub Push = '>',
@@ -32,6 +34,12 @@ pub const Error = struct {
 
     pub fn equals(a: Error, b: Error) bool {
         return mem.eql(u8, a.Code, b.Code) and mem.eql(u8, a.Message, b.Message);
+    }
+
+    pub fn hash(self: Error) u32 {
+        const mixed = hash.mix(hash.hashString(self.Code), hash.hashString(self.Message));
+
+        return hash.finalize(mixed);
     }
 };
 
@@ -61,7 +69,7 @@ test "Error::equals for two different errors" {
     assertOrPanic(!err_1.equals(err_2));
 }
 
-pub const VerbatimStringType = enum {
+pub const VerbatimStringType = packed enum(u1) {
     pub Text,
     pub Markdown,
 
@@ -79,6 +87,12 @@ pub const VerbatimString = struct {
 
     pub fn equals(a: VerbatimString, b: VerbatimString) bool {
         return (a.Type == b.Type) and mem.eql(u8, a.Value, b.Value);
+    }
+
+    pub fn hash(self: VerbatimString) u32 {
+        const mixed = hash.mix(@enumToInt(self.Type), hash.hashString(self.Value));
+
+        return hash.finalize(mixed);
     }
 };
 
@@ -108,7 +122,7 @@ test "VerbatimString::equals for two different verbatim strings" {
     assertOrPanic(!verbatim_string_1.equals(verbatim_string_2));
 }
 
-//const Resp3ValueHashMap = HashMap(Resp3Value, Resp3Value);
+const Resp3ValueHashMap = HashMap(Resp3Value, Resp3Value, Resp3Value.hash, Resp3Value.equals);
 
 pub const Resp3Value = union(Resp3Type) {
     pub Array: []const Resp3Value,
@@ -121,7 +135,7 @@ pub const Resp3Value = union(Resp3Type) {
     pub Boolean: bool,
     pub BlobError: Error,
     pub VerbatimString: VerbatimString,
-    //pub Map: Resp3ValueHashMap,
+    pub Map: Resp3ValueHashMap,
     pub Set: []const Resp3Value, // TODO: proper set type
 
     // TODO: init/deinit to deinit Resp3ValueHashMap?
@@ -177,9 +191,9 @@ pub const Resp3Value = union(Resp3Type) {
                 // = (1) + length_len + \r (1) + \n (1) + total_str_len + \r (1) + \n (1)
                 break :blk @intCast(usize, 5 + length_len + total_str_len);
             },
-            //Resp3Value.Map => |map| blk: {
-            //    break :blk lenOfMapOfValues(map);
-            //},
+            Resp3Value.Map => |map| blk: {
+                break :blk lenOfMapOfValues(map);
+            },
             Resp3Value.Set => |set| blk: {
                 // * (1) + array_len_len + \r (1) + \n (1) + elements_len
                 break :blk lenOfSliceOfValues(set);
@@ -204,20 +218,20 @@ pub const Resp3Value = union(Resp3Type) {
         return 3 + array_len_len + elements_len;
     }
 
-    //fn lenOfMapOfValues(values: Resp3ValueHashMap) usize {
-    //   const map_len_len = get_string_length_for_int(values.count());
-    //
-    //    var elements_len: usize = 0;
-    //
-    //    var it = values.iterator();
-    //    while (it.next()) |entry| {
-    //        elements_len += entry.key.encodedLength();
-    //        elements_len += entry.value.encodedLength();
-    //    }
-    //
-    //    // start_char(1) + map_len_len + \r (1) + \n (1) + elements_len
-    //    return 3 + map_len_len + elements_len;
-    //}
+    fn lenOfMapOfValues(values: Resp3ValueHashMap) usize {
+       const map_len_len = get_string_length_for_int(values.count());
+    
+        var elements_len: usize = 0;
+    
+        var it = values.iterator();
+        while (it.next()) |entry| {
+            elements_len += entry.key.encodedLength();
+            elements_len += entry.value.encodedLength();
+        }
+    
+        // start_char(1) + map_len_len + \r (1) + \n (1) + elements_len
+        return 3 + map_len_len + elements_len;
+    }
 
     pub fn equals(a: Resp3Value, b: Resp3Value) bool {
         if (Resp3Type(a) != Resp3Type(b)) {
@@ -282,6 +296,26 @@ pub const Resp3Value = union(Resp3Type) {
 
                 break :blk a_str.equals(b_str);
             },
+            Resp3Value.Map => |a_map| blk: {
+                const b_map = b.Map;
+
+                if (a_map.count() != b_map.count()) {
+                    break :blk false;
+                }
+
+                var it = a_map.iterator();
+                while (it.next()) |entry| {
+                    if (b_map.get(entry.key)) |b_entry| {
+                        if (!entry.value.equals(b_entry.value)) {
+                            break :blk false;
+                        }
+                    } else {
+                        break :blk false;
+                    }
+                }
+
+                break :blk true;
+            },
             Resp3Value.Set => |a_set| blk: {
                 const b_set = b.Set;
 
@@ -304,6 +338,10 @@ pub const Resp3Value = union(Resp3Type) {
                 break :blk true;
             },
         };
+    }
+
+    pub fn hash(self: Resp3Value) u32 {
+        return 0;
     }
 };
 
@@ -390,24 +428,24 @@ test "Resp3Value::encodedLength for Array of Number" {
     assertOrPanic(val.encodedLength() == expected.len);
 }
 
-//test "Resp3Value::encodedLength for Map of [sring, num]" {
-//    var map = Resp3ValueHashMap.init(debugAllocator);
-//    defer map.deinit();
-//
-//
-//    const key1 = Resp3Value { .SimpleString = &"first" };
-//    const value1 = Resp3Value { .Number = 1 };
-//    assertOrPanic((try map.put(key1, value1)) == null);
-//
-//    const key2 = Resp3Value { .SimpleString = &"second" };
-//    const value2 = Resp3Value { .Number = 2 };
-//    assertOrPanic((try map.put(key2, value2)) == null);
-//
-//    const val = Resp3Value { .Map = map };
-//    const expected = "%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n";
-//
-//    assertOrPanic(val.encodedLength() == expected.len);
-//}
+test "Resp3Value::encodedLength for Map of [sring, num]" {
+    var map = Resp3ValueHashMap.init(debugAllocator);
+    defer map.deinit();
+
+
+    const key1 = Resp3Value { .SimpleString = &"first" };
+    const value1 = Resp3Value { .Number = 1 };
+    assertOrPanic((try map.put(key1, value1)) == null);
+
+    const key2 = Resp3Value { .SimpleString = &"second" };
+    const value2 = Resp3Value { .Number = 2 };
+    assertOrPanic((try map.put(key2, value2)) == null);
+
+    const val = Resp3Value { .Map = map };
+    const expected = "%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n";
+
+    assertOrPanic(val.encodedLength() == expected.len);
+}
 
 test "Resp3Value::encodedLength for Set of mixed types" {
     const orange = Resp3Value { .SimpleString = &"orange" };
@@ -447,4 +485,23 @@ test "Resp3Value::equals for two of the same types but different values" {
     const val_2 = Resp3Value { .Boolean = false };
 
     assertOrPanic(val_1.equals(val_2) == false);
+}
+
+test "Resp3Value::equals for two maps that are equal" {
+    var map = Resp3ValueHashMap.init(debugAllocator);
+    defer map.deinit();
+
+
+    const key1 = Resp3Value { .SimpleString = &"first" };
+    const value1 = Resp3Value { .Number = 1 };
+    assertOrPanic((try map.put(key1, value1)) == null);
+
+    const key2 = Resp3Value { .SimpleString = &"second" };
+    const value2 = Resp3Value { .Number = 2 };
+    assertOrPanic((try map.put(key2, value2)) == null);
+
+    const val = Resp3Value { .Map = map };
+    const val2 = Resp3Value { .Map = map };
+
+    assertOrPanic(val.equals(val2));
 }
