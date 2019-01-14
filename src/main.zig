@@ -4,7 +4,7 @@ const fmt = std.fmt;
 const HashMap = std.hash_map.HashMap;
 const mem = std.mem;
 
-const hash = @import("./hash.zig");
+const hashes = @import("./hashes.zig");
 
 const assertOrPanic = std.debug.assertOrPanic;
 const debugAllocator = std.debug.global_allocator;
@@ -29,17 +29,17 @@ pub const Resp3Type = packed enum(u8) {
 };
 
 pub const Error = struct {
-    pub Code: []const u8,
-    pub Message: []const u8,
+    pub Code: []u8,
+    pub Message: []u8,
 
     pub fn equals(a: Error, b: Error) bool {
         return mem.eql(u8, a.Code, b.Code) and mem.eql(u8, a.Message, b.Message);
     }
 
     pub fn hash(self: Error) u32 {
-        const mixed = hash.mix(hash.hashString(self.Code), hash.hashString(self.Message));
+        const mixed = hashes.mix(hashes.hashString(self.Code), hashes.hashString(self.Message));
 
-        return hash.finalize(mixed);
+        return hashes.finalize(mixed);
     }
 };
 
@@ -83,16 +83,16 @@ pub const VerbatimStringType = packed enum(u1) {
 
 pub const VerbatimString = struct {
     pub Type: VerbatimStringType,
-    pub Value: []const u8,
+    pub Value: []u8,
 
     pub fn equals(a: VerbatimString, b: VerbatimString) bool {
         return (a.Type == b.Type) and mem.eql(u8, a.Value, b.Value);
     }
 
     pub fn hash(self: VerbatimString) u32 {
-        const mixed = hash.mix(@enumToInt(self.Type), hash.hashString(self.Value));
+        const mixed = hashes.mix(@enumToInt(self.Type), hashes.hashString(self.Value));
 
-        return hash.finalize(mixed);
+        return hashes.finalize(mixed);
     }
 };
 
@@ -125,9 +125,9 @@ test "VerbatimString::equals for two different verbatim strings" {
 const Resp3ValueHashMap = HashMap(Resp3Value, Resp3Value, Resp3Value.hash, Resp3Value.equals);
 
 pub const Resp3Value = union(Resp3Type) {
-    pub Array: []const Resp3Value,
-    pub BlobString: []const u8,
-    pub SimpleString: []const u8,
+    pub Array: []Resp3Value,
+    pub BlobString: []u8,
+    pub SimpleString: []u8,
     pub SimpleError: Error,
     pub Number: i64,
     pub Null: void,
@@ -136,7 +136,7 @@ pub const Resp3Value = union(Resp3Type) {
     pub BlobError: Error,
     pub VerbatimString: VerbatimString,
     pub Map: Resp3ValueHashMap,
-    pub Set: []const Resp3Value, // TODO: proper set type
+    pub Set: []Resp3Value, // TODO: proper set type
 
     // TODO: init/deinit to deinit Resp3ValueHashMap?
 
@@ -205,7 +205,7 @@ pub const Resp3Value = union(Resp3Type) {
         return if (val == 0) 1 else (@intCast(usize, math.log10(val) + 1));
     }
 
-    fn lenOfSliceOfValues(values: []const Resp3Value) usize {
+    fn lenOfSliceOfValues(values: []Resp3Value) usize {
         const array_len_len = get_string_length_for_int(values.len);
 
         var elements_len: usize = 0;
@@ -341,7 +341,67 @@ pub const Resp3Value = union(Resp3Type) {
     }
 
     pub fn hash(self: Resp3Value) u32 {
-        return 0;
+        var result: u32 = 0;
+
+        result = hashes.mix(result, @enumToInt(Resp3Type(self)));
+
+        const child = switch (self) {
+            Resp3Value.Array => |arr| blk: {
+                var sum: u32 = 0;
+
+                for (arr) |item| {
+                    sum = hashes.mix(sum, item.hash());
+                }
+
+                break :blk hashes.finalize(sum);
+            },
+            Resp3Value.BlobString => |str| blk: {
+                break :blk hashes.hashString(str);
+            },
+            Resp3Value.SimpleString => |str| blk: {
+                break :blk hashes.hashString(str);
+            },
+            Resp3Type.SimpleError => |err| blk: {
+                break :blk err.hash();
+            },
+            Resp3Value.Number => |num| blk: {
+                break :blk @truncate(u32, num);
+            },
+            Resp3Value.Null => 0,
+            Resp3Value.Boolean => |bool_val| blk: {
+                break :blk @boolToInt(bool_val);
+            },
+            Resp3Value.BlobError => |err| blk: {
+                break :blk err.hash();
+            },
+            Resp3Value.VerbatimString => |str| blk: {
+                break :blk str.hash();
+            },
+            Resp3Value.Map => |values| blk: {
+                var sum: u32 = 0;
+
+                var it = values.iterator();
+                while (it.next()) |entry| {
+                    sum = hashes.mix(sum, entry.key.hash());
+                    sum = hashes.mix(sum, entry.value.hash());
+                }
+
+                break :blk hashes.finalize(sum);
+            },
+            Resp3Value.Set => |set| blk: {
+                var sum: u32 = 0;
+
+                for (set) |item| {
+                    sum = hashes.mix(sum, item.hash());
+                }
+
+                break :blk hashes.finalize(sum);
+            },
+        };
+
+        result = hashes.mix(result, child);
+
+        return hashes.finalize(result);
     }
 };
 
@@ -417,7 +477,7 @@ test "Resp3Value::encodedLength for Array of Number" {
     const num_1 = Resp3Value { .Number = 1 };
     const num_2 = Resp3Value { .Number = 2 };
     const num_3 = Resp3Value { .Number = 3 };
-    const arr = []Resp3Value{ 
+    var arr = []Resp3Value{ 
         num_1, 
         num_2, 
         num_3,
@@ -453,7 +513,7 @@ test "Resp3Value::encodedLength for Set of mixed types" {
     const true_val = Resp3Value { .Boolean = true };
     const number_100 = Resp3Value { .Number = 100 };
     const number_999 = Resp3Value { .Number = 999 };
-    const set = []Resp3Value{ 
+    var set = []Resp3Value{ 
         orange, 
         apple, 
         true_val,
