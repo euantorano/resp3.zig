@@ -8,12 +8,12 @@ pub fn build(b: *Builder) void {
     var main_tests = b.addTest("src/main.zig");
     main_tests.setBuildMode(mode);
 
-    var hash_tests = b.addTest("src/hash.zig");
-    hash_tests.setBuildMode(mode);
+    var hashes_tests = b.addTest("src/hashes.zig");
+    hashes_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
-    test_step.dependOn(&hash_tests.step);
+    test_step.dependOn(&hashes_tests.step);
 
     b.default_step.dependOn(&lib.step);
     b.installArtifact(lib);

@@ -343,7 +343,10 @@ pub const Resp3Value = union(Resp3Type) {
     pub fn hash(self: Resp3Value) u32 {
         var result: u32 = 0;
 
-        result = hashes.mix(result, @enumToInt(Resp3Type(self)));
+        const typeOfValue = Resp3Type(self);
+        const typeOfValueInt = @enumToInt(typeOfValue);
+
+        result = hashes.mix(result, typeOfValueInt);
 
         const child = switch (self) {
             Resp3Value.Array => |arr| blk: {
@@ -365,7 +368,7 @@ pub const Resp3Value = union(Resp3Type) {
                 break :blk err.hash();
             },
             Resp3Value.Number => |num| blk: {
-                break :blk @truncate(u32, num);
+                break :blk hashes.hashInteger64(num);
             },
             Resp3Value.Null => 0,
             Resp3Value.Boolean => |bool_val| blk: {
@@ -491,7 +494,6 @@ test "Resp3Value::encodedLength for Array of Number" {
 test "Resp3Value::encodedLength for Map of [sring, num]" {
     var map = Resp3ValueHashMap.init(debugAllocator);
     defer map.deinit();
-
 
     const key1 = Resp3Value { .SimpleString = &"first" };
     const value1 = Resp3Value { .Number = 1 };

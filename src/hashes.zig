@@ -48,6 +48,13 @@ pub fn hashString(str: []u8) u32 {
     return finalize(result);
 }
 
+pub fn hashInteger64(int: i64) u32 {
+    var arr = []i64{ int };
+    const bytes = @sliceToBytes(arr[0..]);
+
+    return hashString(bytes);
+}
+
 test "hashString for 2 small simple strings and ensure they are different" {
     const hash1 = hashString(&"test");
     const hash2 = hashString(&"test1");
